@@ -9,10 +9,10 @@ from ytmusicapi import YTMusic
 app = FastAPI()
 
 def get_ytmusic() -> YTMusic:
-    oauth_path = "oauth.json"
-    if not os.path.exists(oauth_path):
-        raise RuntimeError("Missing oauth.json secret file on the server")
-    return YTMusic(oauth_path)
+    for p in ("oauth.json", "/etc/secrets/oauth.json"):
+        if os.path.exists(p):
+            return YTMusic(p)
+    raise RuntimeError("Missing oauth.json (checked ./oauth.json and /etc/secrets/oauth.json)")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
