@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import HTMLResponse
@@ -12,6 +13,26 @@ def get_ytmusic() -> YTMusic:
         if os.path.exists(p):
             return YTMusic(p)
     raise RuntimeError("Missing oauth.json (checked ./oauth.json and /etc/secrets/oauth.json)")
+
+def clean_playlist_name(name: str) -> str:
+    name = (name or "").strip()
+
+    # Known bad characters for ytmusicapi playlist creation (e.g. < and >). :contentReference[oaicite:1]{index=1}
+    name = name.replace("<", "").replace(">", "")
+
+    # Remove control chars and collapse whitespace
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+
+    # Reasonable length cap
+    if len(name) > 150:
+        name = name[:150].rstrip()
+
+    return name or "Imported from CSV"
+
+def clean_privacy(p: str) -> str:
+    p = (p or "PRIVATE").strip().upper()
+    return p if p in {"PRIVATE", "UNLISTED", "PUBLIC"} else "PRIVATE"
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -67,13 +88,13 @@ def health():
 async def csv_to_playlist(
     file: UploadFile = File(...),
     playlist_name: str = Form("Imported from CSV"),
-    privacy: str = Form("PRIVATE")  # PRIVATE, UNLISTED, PUBLIC
+    privacy: str = Form("PRIVATE")
 ):
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(400, "Upload a .csv file")
 
     content = await file.read()
-    if not content or len(content) == 0:
+    if not content:
         raise HTTPException(400, "Uploaded file was empty. Re-select the CSV file and try again.")
 
     try:
@@ -85,20 +106,22 @@ async def csv_to_playlist(
 
     df.columns = [str(c).strip().lower() for c in df.columns]
 
-    # Added "songtitle" here
     title_candidates = ["title", "songtitle", "track", "track_name", "song", "name"]
     title_col = next((c for c in title_candidates if c in df.columns), None)
-
     if not title_col:
         raise HTTPException(400, f"CSV must include a title column. Found columns: {list(df.columns)}")
+
+    playlist_name_clean = clean_playlist_name(playlist_name)
+    privacy_clean = clean_privacy(privacy)
 
     try:
         ytmusic = get_ytmusic()
 
+        # Keep description simple to avoid edge-case rejections
         playlist_id = ytmusic.create_playlist(
-            playlist_name,
-            description="Created by CSV importer",
-            privacy_status=privacy
+            playlist_name_clean,
+            description="",
+            privacy_status=privacy_clean
         )
 
         video_ids = []
@@ -120,10 +143,14 @@ async def csv_to_playlist(
         return {
             "playlistId": playlist_id,
             "playlistUrl": f"https://music.youtube.com/playlist?list={playlist_id}",
-            "addedCount": len(video_ids)
+            "addedCount": len(video_ids),
+            "playlistNameUsed": playlist_name_clean,
+            "privacyUsed": privacy_clean,
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(500, f"Playlist creation failed: {type(e).__name__}: {e}")
+        raise HTTPException(
+            500,
+            f"Playlist creation failed: {type(e).__name__}: {e}. "
+            f"(playlistNameUsed='{playlist_name_clean}', privacyUsed='{privacy_clean}')"
+        )
