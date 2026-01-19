@@ -8,7 +8,6 @@ from ytmusicapi import YTMusic
 app = FastAPI()
 
 def get_ytmusic() -> YTMusic:
-    # Render secret files are typically mounted at /etc/secrets/<filename>
     for p in ("oauth.json", "/etc/secrets/oauth.json"):
         if os.path.exists(p):
             return YTMusic(p)
@@ -35,7 +34,7 @@ def home():
       <body>
         <div class="box">
           <h2>CSV → YouTube Music Playlist</h2>
-          <p class="small">CSV must include a <code>title</code> column. Optional: <code>artist</code>.</p>
+          <p class="small">CSV must include a title column (e.g. <code>title</code> or <code>songtitle</code>). Optional: <code>artist</code>.</p>
 
           <form action="/csv-to-playlist" method="post" enctype="multipart/form-data">
             <label>Playlist name</label>
@@ -70,48 +69,29 @@ async def csv_to_playlist(
     playlist_name: str = Form("Imported from CSV"),
     privacy: str = Form("PRIVATE")  # PRIVATE, UNLISTED, PUBLIC
 ):
-    # Basic extension check
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(400, "Upload a .csv file")
 
-    # Read upload bytes
     content = await file.read()
-
-    # Prevent pandas EmptyDataError (empty upload)
     if not content or len(content) == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file was empty. Re-select the CSV file and try again."
-        )
+        raise HTTPException(400, "Uploaded file was empty. Re-select the CSV file and try again.")
 
-    # Parse CSV safely
     try:
         df = pd.read_csv(io.BytesIO(content))
     except pd.errors.EmptyDataError:
-        raise HTTPException(
-            status_code=400,
-            detail="CSV appears empty or unreadable. Make sure it has a header row like: title,artist"
-        )
+        raise HTTPException(400, "CSV appears empty or unreadable. Make sure it has a header row.")
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not parse CSV: {type(e).__name__}: {e}"
-        )
+        raise HTTPException(400, f"Could not parse CSV: {type(e).__name__}: {e}")
 
-    # Normalize column names (strip spaces + lowercase)
     df.columns = [str(c).strip().lower() for c in df.columns]
 
-    # Accept common title column names
-    title_candidates = ["title", "track", "track_name", "song", "name"]
+    # Added "songtitle" here
+    title_candidates = ["title", "songtitle", "track", "track_name", "song", "name"]
     title_col = next((c for c in title_candidates if c in df.columns), None)
 
     if not title_col:
-        raise HTTPException(
-            400,
-            f"CSV must include a title column. Found columns: {list(df.columns)}"
-        )
+        raise HTTPException(400, f"CSV must include a title column. Found columns: {list(df.columns)}")
 
-    # Create playlist + add items
     try:
         ytmusic = get_ytmusic()
 
@@ -124,11 +104,7 @@ async def csv_to_playlist(
         video_ids = []
         for _, row in df.iterrows():
             title = str(row.get(title_col, "")).strip()
-
-            # Optional artist column support (also normalized)
-            artist = ""
-            if "artist" in df.columns:
-                artist = str(row.get("artist", "")).strip()
+            artist = str(row.get("artist", "")).strip() if "artist" in df.columns else ""
 
             if not title:
                 continue
