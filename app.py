@@ -5,10 +5,10 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import HTMLResponse
 from ytmusicapi import YTMusic
 
-
 app = FastAPI()
 
 def get_ytmusic() -> YTMusic:
+    # Render secret files are typically mounted at /etc/secrets/<filename>
     for p in ("oauth.json", "/etc/secrets/oauth.json"):
         if os.path.exists(p):
             return YTMusic(p)
@@ -67,44 +67,73 @@ def health():
 @app.post("/csv-to-playlist")
 async def csv_to_playlist(
     file: UploadFile = File(...),
-    playlist_name: str = "Imported from CSV",
-    privacy: str = "PRIVATE"  # PRIVATE, UNLISTED, PUBLIC
+    playlist_name: str = Form("Imported from CSV"),
+    privacy: str = Form("PRIVATE")  # PRIVATE, UNLISTED, PUBLIC
 ):
+    # Basic extension check
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(400, "Upload a .csv file")
 
+    # Read upload bytes
     content = await file.read()
-    df = pd.read_csv(pd.io.common.BytesIO(content))
+
+    # Prevent pandas EmptyDataError (empty upload)
+    if not content or len(content) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file was empty. Re-select the CSV file and try again."
+        )
+
+    # Parse CSV safely
+    try:
+        df = pd.read_csv(io.BytesIO(content))
+    except pd.errors.EmptyDataError:
+        raise HTTPException(
+            status_code=400,
+            detail="CSV appears empty or unreadable. Make sure it has a header row like: title,artist"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not parse CSV: {type(e).__name__}: {e}"
+        )
 
     if "title" not in df.columns:
         raise HTTPException(400, "CSV must include a 'title' column")
 
-    ytmusic = get_ytmusic()
+    # Create playlist + add items
+    try:
+        ytmusic = get_ytmusic()
 
-    playlist_id = ytmusic.create_playlist(
-        playlist_name,
-        description="Created by CSV importer",
-        privacy_status=privacy
-    )
+        playlist_id = ytmusic.create_playlist(
+            playlist_name,
+            description="Created by CSV importer",
+            privacy_status=privacy
+        )
 
-    video_ids = []
-    for _, row in df.iterrows():
-        title = str(row.get("title", "")).strip()
-        artist = str(row.get("artist", "")).strip() if "artist" in df.columns else ""
+        video_ids = []
+        for _, row in df.iterrows():
+            title = str(row.get("title", "")).strip()
+            artist = str(row.get("artist", "")).strip() if "artist" in df.columns else ""
 
-        if not title:
-            continue
+            if not title:
+                continue
 
-        q = f"{title} {artist}".strip()
-        results = ytmusic.search(q, filter="songs")
-        if results:
-            video_ids.append(results[0]["videoId"])
+            q = f"{title} {artist}".strip()
+            results = ytmusic.search(q, filter="songs")
+            if results:
+                video_ids.append(results[0]["videoId"])
 
-    if video_ids:
-        ytmusic.add_playlist_items(playlist_id, video_ids)
+        if video_ids:
+            ytmusic.add_playlist_items(playlist_id, video_ids)
 
-    return {
-        "playlistId": playlist_id,
-        "playlistUrl": f"https://music.youtube.com/playlist?list={playlist_id}",
-        "addedCount": len(video_ids)
-    }
+        return {
+            "playlistId": playlist_id,
+            "playlistUrl": f"https://music.youtube.com/playlist?list={playlist_id}",
+            "addedCount": len(video_ids)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Playlist creation failed: {type(e).__name__}: {e}")
