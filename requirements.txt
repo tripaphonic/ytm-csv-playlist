@@ -1,5 +1,5 @@
-fastapi
-uvicorn[standard]
-python-multipart
-pandas
-ytmusicapi
+fastapi==0.115.6
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pandas==2.2.3
+ytmusicapi==1.7.5
