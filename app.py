@@ -1,4 +1,4 @@
-import os, base64, tempfile
+import os
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from ytmusicapi import YTMusic
@@ -6,16 +6,11 @@ from ytmusicapi import YTMusic
 app = FastAPI()
 
 def get_ytmusic() -> YTMusic:
-    b64 = os.getenv("YTMUSIC_OAUTH_B64")
-    if not b64:
-        raise RuntimeError("Missing YTMUSIC_OAUTH_B64")
-    data = base64.b64decode(b64).decode("utf-8")
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-    tmp.write(data.encode("utf-8"))
-    tmp.close()
-
-    return YTMusic(tmp.name)
+    # Render Secret File should be saved as "oauth.json" at runtime
+    oauth_path = "oauth.json"
+    if not os.path.exists(oauth_path):
+        raise RuntimeError("Missing oauth.json secret file on the server")
+    return YTMusic(oauth_path)
 
 @app.get("/health")
 def health():
