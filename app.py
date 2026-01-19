@@ -98,8 +98,18 @@ async def csv_to_playlist(
             detail=f"Could not parse CSV: {type(e).__name__}: {e}"
         )
 
-    if "title" not in df.columns:
-        raise HTTPException(400, "CSV must include a 'title' column")
+    # Normalize column names (strip spaces + lowercase)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # Accept common title column names
+    title_candidates = ["title", "track", "track_name", "song", "name"]
+    title_col = next((c for c in title_candidates if c in df.columns), None)
+
+    if not title_col:
+        raise HTTPException(
+            400,
+            f"CSV must include a title column. Found columns: {list(df.columns)}"
+        )
 
     # Create playlist + add items
     try:
@@ -113,8 +123,12 @@ async def csv_to_playlist(
 
         video_ids = []
         for _, row in df.iterrows():
-            title = str(row.get("title", "")).strip()
-            artist = str(row.get("artist", "")).strip() if "artist" in df.columns else ""
+            title = str(row.get(title_col, "")).strip()
+
+            # Optional artist column support (also normalized)
+            artist = ""
+            if "artist" in df.columns:
+                artist = str(row.get("artist", "")).strip()
 
             if not title:
                 continue
